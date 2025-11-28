@@ -12,7 +12,10 @@ st.set_page_config(page_title="Steam Sentiment Dashboard", layout="wide", page_i
 
 # --- PATH CONFIGURATION (LOCAL) ---
 DATA_FILE = "STEAM_REVIEWS_3_CLASS_ROBERTA.csv"
-MODEL_PATH = "final_steam_sentiment_model_3class"
+model_path = "manchae86/steam-sentiment-model"
+
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
 # --- LOAD DATA ---
 @st.cache_data
