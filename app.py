@@ -1,21 +1,21 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from wordcloud import WordCloud
+from wordcloud import WordCloud, STOPWORDS
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import os
+import re  # Added for advanced text cleaning
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Steam Sentiment Dashboard", layout="wide", page_icon="🎮")
 
-# --- PATH CONFIGURATION (LOCAL) ---
+# --- PATH CONFIGURATION ---
 DATA_FILE = "STEAM_REVIEWS_3_CLASS_ROBERTA.csv"
-model_path = "manchae86/steam-sentiment-model"
 
-tokenizer = AutoTokenizer.from_pretrained(model_path)
-model = AutoModelForSequenceClassification.from_pretrained(model_path)
+# ⚠️ CHECK THIS: Ensure this matches your Hugging Face username exactly
+MODEL_PATH = "manchae86/steam-sentiment-model" 
 
 # --- LOAD DATA ---
 @st.cache_data
@@ -42,15 +42,15 @@ def load_data():
 # --- LOAD MODEL ---
 @st.cache_resource
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        return None, None
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
         model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
         return tokenizer, model
     except Exception as e:
+        st.error(f"Error loading model: {e}")
         return None, None
 
+# Load the data
 df = load_data()
 
 if df is None:
@@ -62,7 +62,6 @@ if df is None:
 # ==========================================
 st.sidebar.title("🎮 Menu")
 
-# 1. The "Clickable Buttons" for Features
 menu_choice = st.sidebar.radio(
     "Go to:",
     ["📊 Analytics Dashboard", "☁️ Word Clouds", "🤖 Live AI Tester"]
@@ -70,7 +69,7 @@ menu_choice = st.sidebar.radio(
 
 st.sidebar.divider()
 
-# 2. Global Filters
+# Global Filters
 st.sidebar.header("Filter Options")
 all_games = ["All Games"] + list(df['game_name'].unique())
 selected_game = st.sidebar.selectbox("Select a Game:", all_games)
@@ -80,7 +79,7 @@ if selected_game != "All Games":
 else:
     filtered_df = df
 
-# 3. Global Metrics
+# Global Metrics
 st.sidebar.divider()
 total = len(filtered_df)
 st.sidebar.metric("Total Reviews", f"{total:,}")
@@ -112,7 +111,6 @@ if menu_choice == "📊 Analytics Dashboard":
     with col2:
         st.subheader("Sentiment Trend")
         if 'date' in filtered_df.columns and not filtered_df['date'].isna().all():
-            # SMART ZOOM LOGIC
             min_date = filtered_df['date'].min()
             max_date = filtered_df['date'].max()
             days_diff = (max_date - min_date).days
@@ -124,7 +122,6 @@ if menu_choice == "📊 Analytics Dashboard":
                 time_period = 'M'
                 x_label = "Date (Monthly)"
 
-            # Copy to avoid warnings
             plot_df = filtered_df.copy()
             plot_df['time_group'] = plot_df['date'].dt.to_period(time_period).astype(str)
             
@@ -153,7 +150,7 @@ if menu_choice == "📊 Analytics Dashboard":
         st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
-# PAGE 2: WORD CLOUDS
+# PAGE 2: WORD CLOUDS (UPDATED)
 # ==========================================
 elif menu_choice == "☁️ Word Clouds":
     st.title(f"☁️ Word Cloud Analysis: {selected_game}")
@@ -161,30 +158,61 @@ elif menu_choice == "☁️ Word Clouds":
     
     sentiment_filter = st.radio("Select Sentiment to Analyze:", ["Satisfied", "Dissatisfied"], horizontal=True)
     
-    # Filter Data
     subset = filtered_df[filtered_df['Sentiment'] == sentiment_filter]
     
     if subset.empty:
-        st.warning(f"No {sentiment_filter} reviews found for {selected_game}. Cannot generate word cloud.")
+        st.warning(f"No {sentiment_filter} reviews found for {selected_game}.")
     else:
-        # Join all text
-        text_data = " ".join(subset['clean_text'].tolist())
-        
-        if len(text_data) < 50:
-            st.warning("Not enough text data to generate a word cloud (Text is too short).")
-        else:
-            # Generate Cloud
-            with st.spinner("Generating Word Cloud..."):
-                stopwords = set(['game', 'play', 'played', 'playing', 'hours', 'really', 'much', 'even', 'get', 'one', 'time', 'review', 'steam', 'make', 'good', 'bad'])
+        with st.spinner("Cleaning text and generating Word Cloud..."):
+            # 1. Combine all text
+            text_data = " ".join(subset['clean_text'].tolist()).lower()
+
+            # 2. Advanced Cleaning (Regex)
+            # Remove URLs (http/https/www)
+            text_data = re.sub(r'https?://\S+|www\.\S+', '', text_data)
+            # Remove HTML tags
+            text_data = re.sub(r'<.*?>', '', text_data)
+            # Remove HTML artifacts like &amp;
+            text_data = re.sub(r'&[a-z]+;', '', text_data)
+            # Remove Numbers and Punctuation (Keep only letters and spaces)
+            text_data = re.sub(r'[^a-z\s]', '', text_data)
+            # Remove very short words (1-2 letters)
+            text_data = re.sub(r'\b\w{1,2}\b', '', text_data)
+
+            if len(text_data) < 50:
+                st.warning("Not enough text data after cleaning to generate a word cloud.")
+            else:
+                # 3. Define Stopwords
+                # Start with standard English stopwords
+                final_stopwords = set(STOPWORDS)
                 
-                wc = WordCloud(width=1000, height=500, background_color='white', stopwords=stopwords, colormap='viridis').generate(text_data)
+                # Add Domain Specific & Low Value words
+                custom_words = [
+                    'game', 'play', 'played', 'playing', 'player', 'hours', 
+                    'review', 'steam', 'access', 'early', 'version',
+                    'make', 'get', 'go', 'do', 'did', 'done', 'just', 'really', 
+                    'very', 'much', 'even', 'also', 'thing', 'one', 'would', 
+                    'could', 'should', 'good', 'bad', 'people', 'think', 'know',
+                    'time', 'day', 'year', 'best', 'better', 'great'
+                ]
+                final_stopwords.update(custom_words)
+
+                # 4. Generate Cloud
+                wc = WordCloud(
+                    width=1000, 
+                    height=500, 
+                    background_color='white', 
+                    stopwords=final_stopwords, 
+                    colormap='viridis',
+                    collocations=False  # Prevents doubling words like "game game"
+                ).generate(text_data)
                 
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.imshow(wc, interpolation='bilinear')
                 ax.axis('off')
                 st.pyplot(fig)
             
-            st.success(f"Generated from {len(subset)} reviews.")
+                st.success(f"Generated from {len(subset)} reviews.")
 
 # ==========================================
 # PAGE 3: LIVE AI TESTER
@@ -200,7 +228,7 @@ elif menu_choice == "🤖 Live AI Tester":
         
         if model is None:
             st.error(f"❌ **Model Not Found:** `{MODEL_PATH}`")
-            st.info("Make sure you downloaded the 'final_steam_sentiment_model_3class' folder to this directory.")
+            st.info("Check your Hugging Face model settings.")
         else:
             with st.spinner("Thinking..."):
                 inputs = tokenizer(user_input, return_tensors="pt", truncation=True, max_length=128)
@@ -218,7 +246,6 @@ elif menu_choice == "🤖 Live AI Tester":
                 st.progress(confidence)
                 st.caption(f"Confidence Score: {confidence:.1%}")
                 
-                # Bar Chart of Probabilities
                 chart_data = pd.DataFrame({
                     "Sentiment": ["Dissatisfied", "Neutral", "Satisfied"],
                     "Probability": probs[0].tolist()
