@@ -46,3 +46,5 @@ If you want to run this dashboard on your own machine, follow these steps:
 ```bash
 git clone [https://github.com/dev-manchae/fyp3.0.git](https://github.com/dev-manchae/fyp3.0.git)
 cd fyp3.0
+
+**2. Install dependencies Make sure you have Python installed. Then run:**
