@@ -6,16 +6,29 @@ import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import os
-import re  # Added for advanced text cleaning
+import re
+import ftfy
+from unidecode import unidecode
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Steam Sentiment Dashboard", layout="wide", page_icon="🎮")
 
 # --- PATH CONFIGURATION ---
 DATA_FILE = "STEAM_REVIEWS_3_CLASS_ROBERTA.csv"
-
-# ⚠️ CHECK THIS: Ensure this matches your Hugging Face username exactly
+BENCHMARK_CSV = "v4_model_metrics.csv"
+# Removed BENCHMARK_IMG because we are building it with code now!
 MODEL_PATH = "manchae86/steam-sentiment-model" 
+
+# --- HELPER: TEXT CLEANING ---
+def clean_text_for_model(text):
+    if not isinstance(text, str): return ""
+    text = ftfy.fix_text(text)
+    text = unidecode(text)
+    text = re.sub(r"<.*?>", " ", text)
+    text = re.sub(r"http\S+|www\S+", " ", text)
+    text = re.sub(r"@\w+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 # --- LOAD DATA ---
 @st.cache_data
@@ -24,16 +37,13 @@ def load_data():
         return None
     df = pd.read_csv(DATA_FILE)
     
-    # Map labels (0,1,2 -> Words)
     label_map = {0: "Dissatisfied", 1: "Neutral", 2: "Satisfied"}
     if 'sentiment_label' in df.columns:
         df['Sentiment'] = df['sentiment_label'].map(label_map)
     
-    # Handle Timestamps
     if 'timestamp' in df.columns:
         df['date'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
     
-    # Ensure clean_text is string
     if 'clean_text' in df.columns:
         df['clean_text'] = df['clean_text'].astype(str).fillna("")
         
@@ -50,7 +60,6 @@ def load_model():
         st.error(f"Error loading model: {e}")
         return None, None
 
-# Load the data
 df = load_data()
 
 if df is None:
@@ -64,7 +73,7 @@ st.sidebar.title("🎮 Menu")
 
 menu_choice = st.sidebar.radio(
     "Go to:",
-    ["📊 Analytics Dashboard", "☁️ Word Clouds", "🤖 Live AI Tester"]
+    ["📊 Analytics Dashboard", "☁️ Word Clouds", "🤖 Live AI Tester", "🏆 Model Benchmarks"]
 )
 
 st.sidebar.divider()
@@ -150,7 +159,7 @@ if menu_choice == "📊 Analytics Dashboard":
         st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
-# PAGE 2: WORD CLOUDS (UPDATED)
+# PAGE 2: WORD CLOUDS
 # ==========================================
 elif menu_choice == "☁️ Word Clouds":
     st.title(f"☁️ Word Cloud Analysis: {selected_game}")
@@ -164,29 +173,19 @@ elif menu_choice == "☁️ Word Clouds":
         st.warning(f"No {sentiment_filter} reviews found for {selected_game}.")
     else:
         with st.spinner("Cleaning text and generating Word Cloud..."):
-            # 1. Combine all text
             text_data = " ".join(subset['clean_text'].tolist()).lower()
 
-            # 2. Advanced Cleaning (Regex)
-            # Remove URLs (http/https/www)
+            # Visual Cleaning
             text_data = re.sub(r'https?://\S+|www\.\S+', '', text_data)
-            # Remove HTML tags
             text_data = re.sub(r'<.*?>', '', text_data)
-            # Remove HTML artifacts like &amp;
             text_data = re.sub(r'&[a-z]+;', '', text_data)
-            # Remove Numbers and Punctuation (Keep only letters and spaces)
             text_data = re.sub(r'[^a-z\s]', '', text_data)
-            # Remove very short words (1-2 letters)
             text_data = re.sub(r'\b\w{1,2}\b', '', text_data)
 
             if len(text_data) < 50:
                 st.warning("Not enough text data after cleaning to generate a word cloud.")
             else:
-                # 3. Define Stopwords
-                # Start with standard English stopwords
                 final_stopwords = set(STOPWORDS)
-                
-                # Add Domain Specific & Low Value words
                 custom_words = [
                     'game', 'play', 'played', 'playing', 'player', 'hours', 
                     'review', 'steam', 'access', 'early', 'version',
@@ -197,14 +196,9 @@ elif menu_choice == "☁️ Word Clouds":
                 ]
                 final_stopwords.update(custom_words)
 
-                # 4. Generate Cloud
                 wc = WordCloud(
-                    width=1000, 
-                    height=500, 
-                    background_color='white', 
-                    stopwords=final_stopwords, 
-                    colormap='viridis',
-                    collocations=False  # Prevents doubling words like "game game"
+                    width=1000, height=500, background_color='white', 
+                    stopwords=final_stopwords, colormap='viridis', collocations=False
                 ).generate(text_data)
                 
                 fig, ax = plt.subplots(figsize=(12, 6))
@@ -228,10 +222,10 @@ elif menu_choice == "🤖 Live AI Tester":
         
         if model is None:
             st.error(f"❌ **Model Not Found:** `{MODEL_PATH}`")
-            st.info("Check your Hugging Face model settings.")
         else:
-            with st.spinner("Thinking..."):
-                inputs = tokenizer(user_input, return_tensors="pt", truncation=True, max_length=128)
+            with st.spinner("Processing..."):
+                cleaned_input = clean_text_for_model(user_input)
+                inputs = tokenizer(cleaned_input, return_tensors="pt", truncation=True, max_length=128)
                 with torch.no_grad():
                     outputs = model(**inputs)
                 
@@ -243,6 +237,10 @@ elif menu_choice == "🤖 Live AI Tester":
                 colors = ["#e74c3c", "#fc8d62", "#66c2a5"]
                 
                 st.markdown(f"### Prediction: <span style='color:{colors[pred_idx]}'>{labels[pred_idx]}</span>", unsafe_allow_html=True)
+                
+                with st.expander("See how the AI sees your text"):
+                    st.code(cleaned_input)
+
                 st.progress(confidence)
                 st.caption(f"Confidence Score: {confidence:.1%}")
                 
@@ -251,3 +249,69 @@ elif menu_choice == "🤖 Live AI Tester":
                     "Probability": probs[0].tolist()
                 })
                 st.bar_chart(chart_data.set_index("Sentiment"))
+
+# ==========================================
+# PAGE 4: MODEL BENCHMARKS (DYNAMIC)
+# ==========================================
+elif menu_choice == "🏆 Model Benchmarks":
+    st.title("🏆 Model Performance & Comparison")
+    st.markdown("Comparing our fine-tuned **RoBERTa v4.0** against industry baselines.")
+    
+    if os.path.exists(BENCHMARK_CSV):
+        # 1. Load Data
+        metrics_df = pd.read_csv(BENCHMARK_CSV, index_col=0)
+        
+        # 2. Display Raw Stats
+        st.subheader("📋 Statistical Performance")
+        st.dataframe(metrics_df.style.highlight_max(axis=0, color='#66c2a5'), use_container_width=True)
+
+        st.divider()
+
+        # 3. Create Dynamic Plotly Chart
+        st.subheader("📊 Accuracy vs. F1-Score Comparison")
+        
+        # Prepare data for Plotly (Melt from Wide to Long format)
+        # Result: Columns will be [Model, Metric, Score]
+        plot_df = metrics_df.reset_index().rename(columns={'index': 'Model'})
+        plot_df = plot_df.melt(id_vars='Model', 
+                               value_vars=['Accuracy', 'F1-Score'], 
+                               var_name='Metric', 
+                               value_name='Score')
+        
+        # Sort by Score so the best model is on the right
+        plot_df = plot_df.sort_values(by='Score', ascending=True)
+
+        # Generate Chart
+        fig = px.bar(
+            plot_df, 
+            x='Model', 
+            y='Score', 
+            color='Metric', 
+            barmode='group',
+            text_auto='.3f', # Show values on bars automatically
+            color_discrete_sequence=px.colors.qualitative.Pastel,
+            title="Comparison: VADER vs SVM vs RoBERTa"
+        )
+        
+        # Customize Layout
+        fig.update_layout(
+            yaxis_title="Score (0-1)",
+            yaxis_range=[0, 1.1],
+            xaxis_title="Model Type",
+            legend_title="Metric"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.warning(f"Benchmark CSV ({BENCHMARK_CSV}) not found. Please upload it to the GitHub repository.")
+
+    st.divider()
+
+    # 4. Key Findings
+    st.subheader("🧠 Key Findings")
+    st.markdown("""
+    * **RoBERTa (v4.0) is the Champion:** Achieving **~93.7% accuracy**, it significantly outperforms traditional methods.
+    * **Why VADER Failed (74.7%):** As a rule-based lexicon, VADER struggled with **gaming slang** (e.g., "nerf", "grind", "broken") and sarcasm.
+    * **Why RoBERTa Won:** Unlike SVM (which looks at word frequency), RoBERTa understands **context**. It knows that *"long hours"* is good for an RPG but bad for a loading screen.
+    """)
